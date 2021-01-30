@@ -1,14 +1,14 @@
 #!groovy
 
-import groovy.json.JsonSlurperClassic
+// import groovy.json.JsonSlurperClassic
 
 node {
 
     def SF_CONSUMER_KEY=env.SF_CONSUMER_KEY
     def SF_USERNAME=env.SF_USERNAME
     def SERVER_KEY_CREDENTALS_ID=env.SERVER_KEY_CREDENTALS_ID
-    def TEST_LEVEL='RunLocalTests'
-    def PACKAGE_NAME='0Ho1U000000CaUzSAK'
+    def TEST_LEVEL=env.TEST_LEVEL
+    def PACKAGE_NAME=env.PACKAGE_NAME
     def PACKAGE_VERSION
     def SF_INSTANCE_URL = env.SF_INSTANCE_URL ?: "https://login.salesforce.com"
 
@@ -19,7 +19,7 @@ node {
     // Check out code from source control.
     // -------------------------------------------------------------------------
 
-    stage('checkout source') {
+    stage('Checkout Source') {
         checkout scm
     }
 
@@ -34,11 +34,25 @@ node {
         withCredentials([file(credentialsId: SERVER_KEY_CREDENTALS_ID, variable: 'server_key_file')]) {
 
             // -------------------------------------------------------------------------
+            // Log out before running JWT to force generating a local auth file
+            // -------------------------------------------------------------------------
+
+            stage('Remove old .sfdx') {
+                sh returnStatus: true, script: "rm -rf ./.sfdx"
+                sh returnStatus: true, script: "cp ${server_key_file} ./server.key"
+                //rc = command "${toolbelt}/sfdx force:auth:logout -a"
+                //if (rc != 0) {
+                //    error 'Salesforce dev hub log out failed.'
+                //}
+            }
+
+
+            // -------------------------------------------------------------------------
             // Authorize the Dev Hub org with JWT key and give it an alias.
             // -------------------------------------------------------------------------
 
             stage('Authorize DevHub') {
-                rc = command "${toolbelt}/sfdx force:auth:jwt:grant --instanceurl ${SF_INSTANCE_URL} --clientid ${SF_CONSUMER_KEY} --username ${SF_USERNAME} --jwtkeyfile ${server_key_file} --setdefaultdevhubusername --setalias HubOrg"
+                rc = command "${toolbelt}/sfdx force:auth:jwt:grant --instanceurl ${SF_INSTANCE_URL} --clientid ${SF_CONSUMER_KEY} --username ${SF_USERNAME} --jwtkeyfile server.key --setdefaultdevhubusername --setalias HubOrg"
                 if (rc != 0) {
                     error 'Salesforce dev hub org authorization failed.'
                 }
@@ -50,7 +64,7 @@ node {
             // -------------------------------------------------------------------------
 
             stage('Create Test Scratch Org') {
-                rc = command "${toolbelt}/sfdx force:org:create --targetdevhubusername HubOrg --setdefaultusername --definitionfile config/project-scratch-def.json --setalias ciorg --wait 10 --durationdays 1"
+                rc = command "${toolbelt}/sfdx force:org:create --targetdevhubusername HubOrg --setdefaultusername --definitionfile config/developer.json --setalias ciorg --wait 33 --durationdays 14"
                 if (rc != 0) {
                     error 'Salesforce test scratch org creation failed.'
                 }
@@ -62,6 +76,10 @@ node {
             // -------------------------------------------------------------------------
 
             stage('Display Test Scratch Org') {
+                rc = command "${toolbelt}/sfdx force:user:password:generate --targetusername ciorg"
+                if (rc != 0) {
+                    error 'Salesforce test scratch org password generation failed.'
+                }
                 rc = command "${toolbelt}/sfdx force:org:display --targetusername ciorg"
                 if (rc != 0) {
                     error 'Salesforce test scratch org display failed.'
@@ -82,11 +100,23 @@ node {
 
 
             // -------------------------------------------------------------------------
+            // Run scratch org initialization script.
+            // -------------------------------------------------------------------------
+
+            stage('Run Scratch Org Init Script') {
+                rc = command "${toolbelt}/sfdx force:apex:execute --targetusername ciorg --apexcodefile init-scratch-org"
+                if (rc != 0) {
+                    error 'Salesforce run init scratch org script failed.'
+                }
+            }
+
+
+            // -------------------------------------------------------------------------
             // Run unit tests in test scratch org.
             // -------------------------------------------------------------------------
 
             stage('Run Tests In Test Scratch Org') {
-                rc = command "${toolbelt}/sfdx force:apex:test:run --targetusername ciorg --wait 10 --resultformat tap --codecoverage --testlevel ${TEST_LEVEL}"
+                rc = command "${toolbelt}/sfdx force:apex:test:run --targetusername ciorg --wait 33 --resultformat tap --codecoverage --testlevel ${TEST_LEVEL}"
                 if (rc != 0) {
                     error 'Salesforce unit test run in test scratch org failed.'
                 }
@@ -101,92 +131,6 @@ node {
                 rc = command "${toolbelt}/sfdx force:org:delete --targetusername ciorg --noprompt"
                 if (rc != 0) {
                     error 'Salesforce test scratch org deletion failed.'
-                }
-            }
-
-
-            // -------------------------------------------------------------------------
-            // Create package version.
-            // -------------------------------------------------------------------------
-
-            stage('Create Package Version') {
-                if (isUnix()) {
-                    output = sh returnStdout: true, script: "${toolbelt}/sfdx force:package:version:create --package ${PACKAGE_NAME} --installationkeybypass --wait 10 --json --targetdevhubusername HubOrg"
-                } else {
-                    output = bat(returnStdout: true, script: "${toolbelt}/sfdx force:package:version:create --package ${PACKAGE_NAME} --installationkeybypass --wait 10 --json --targetdevhubusername HubOrg").trim()
-                    output = output.readLines().drop(1).join(" ")
-                }
-
-                // Wait 5 minutes for package replication.
-                sleep 300
-
-                def jsonSlurper = new JsonSlurperClassic()
-                def response = jsonSlurper.parseText(output)
-
-                PACKAGE_VERSION = response.result.SubscriberPackageVersionId
-
-                response = null
-
-                echo ${PACKAGE_VERSION}
-            }
-
-
-            // -------------------------------------------------------------------------
-            // Create new scratch org to install package to.
-            // -------------------------------------------------------------------------
-
-            stage('Create Package Install Scratch Org') {
-                rc = command "${toolbelt}/sfdx force:org:create --targetdevhubusername HubOrg --setdefaultusername --definitionfile config/project-scratch-def.json --setalias installorg --wait 10 --durationdays 1"
-                if (rc != 0) {
-                    error 'Salesforce package install scratch org creation failed.'
-                }
-            }
-
-
-            // -------------------------------------------------------------------------
-            // Display install scratch org info.
-            // -------------------------------------------------------------------------
-
-            stage('Display Install Scratch Org') {
-                rc = command "${toolbelt}/sfdx force:org:display --targetusername installorg"
-                if (rc != 0) {
-                    error 'Salesforce install scratch org display failed.'
-                }
-            }
-
-
-            // -------------------------------------------------------------------------
-            // Install package in scratch org.
-            // -------------------------------------------------------------------------
-
-            stage('Install Package In Scratch Org') {
-                rc = command "${toolbelt}/sfdx force:package:install --package ${PACKAGE_VERSION} --targetusername installorg --wait 10"
-                if (rc != 0) {
-                    error 'Salesforce package install failed.'
-                }
-            }
-
-
-            // -------------------------------------------------------------------------
-            // Run unit tests in package install scratch org.
-            // -------------------------------------------------------------------------
-
-            stage('Run Tests In Package Install Scratch Org') {
-                rc = command "${toolbelt}/sfdx force:apex:test:run --targetusername installorg --resultformat tap --codecoverage --testlevel ${TEST_LEVEL} --wait 10"
-                if (rc != 0) {
-                    error 'Salesforce unit test run in pacakge install scratch org failed.'
-                }
-            }
-
-
-            // -------------------------------------------------------------------------
-            // Delete package install scratch org.
-            // -------------------------------------------------------------------------
-
-            stage('Delete Package Install Scratch Org') {
-                rc = command "${toolbelt}/sfdx force:org:delete --targetusername installorg --noprompt"
-                if (rc != 0) {
-                    error 'Salesforce package install scratch org deletion failed.'
                 }
             }
         }
