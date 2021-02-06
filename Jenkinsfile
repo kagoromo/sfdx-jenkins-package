@@ -103,12 +103,16 @@ node {
             // Run scratch org initialization script.
             // -------------------------------------------------------------------------
 
-            //stage('Run Scratch Org Init Script') {
-            //    rc = command "${toolbelt}/sfdx force:apex:execute --targetusername ciorg --apexcodefile init-scratch-org"
-            //    if (rc != 0) {
-            //        error 'Salesforce run init scratch org script failed.'
-            //    }
-            //}
+            stage('Run Scratch Org Init Script') {
+                rc = command "${toolbelt}/sfdx force:user:permset:assign -n recipes --targetusername ciorg"
+                if (rc != 0) {
+                    error 'Salesforce run init scratch org script failed.'
+                }
+                rc = command "${toolbelt}/sfdx force:data:tree:import -p ./data/data-plan.json --targetusername ciorg"
+                if (rc != 0) {
+                    error 'Salesforce run init scratch org script failed.'
+                }
+            }
 
 
             // -------------------------------------------------------------------------
