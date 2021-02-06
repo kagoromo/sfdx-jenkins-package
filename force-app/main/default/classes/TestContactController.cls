@@ -55,9 +55,9 @@ public with sharing class TestContactController {
         Test.stopTest();
 
         System.assertEquals(
-            'First 1 Last 1',
+            'Last 1 First 1',
             cont.Name,
-            'The contact name should be: First 1 Last 1'
+            'The contact name should be: Last 1 First 1'
         );
     }
 }

@@ -73,9 +73,9 @@ private class TestLMSVisualforceController {
 
         // Simulate name as retrieved via the Contact.Name field
         String testContactName =
-            testContact.FirstName +
+        testContact.LastName +
             ' ' +
-            testContact.LastName;
+            testContact.FirstName;
 
         // Verify matching record values when retrieved via the controller
         System.assertEquals(
